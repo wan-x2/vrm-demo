@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+// @ts-ignore
 import { Holistic, Results } from '@mediapipe/holistic';
+// @ts-ignore
 import { drawConnectors, drawLandmarks } from '@mediapipe/drawing_utils';
 import * as Kalidokit from 'kalidokit';
 
@@ -28,6 +30,8 @@ let renderer: THREE.WebGLRenderer;
 let currentVrm: VRM | null = null;
 let clock: THREE.Clock;
 let previousRig: PreviousRig = {};
+let holisticInstance: any = null;
+let isDetecting = false;
 
 // Elements
 const video = document.getElementById('video') as HTMLVideoElement;
@@ -39,6 +43,8 @@ const status = document.getElementById('status') as HTMLDivElement;
 
 // Initialize Three.js
 function initThree() {
+  console.log('Initializing Three.js...');
+  
   // Scene
   scene = new THREE.Scene();
   
@@ -50,6 +56,7 @@ function initThree() {
     1000
   );
   camera.position.set(0, 1.4, 2);
+  camera.lookAt(0, 1.4, 0);
   
   // Renderer with transparent background
   renderer = new THREE.WebGLRenderer({
@@ -73,6 +80,8 @@ function initThree() {
   
   // Handle window resize
   window.addEventListener('resize', onWindowResize);
+  
+  console.log('Three.js initialized');
 }
 
 function onWindowResize() {
@@ -85,6 +94,7 @@ function onWindowResize() {
 
 // Load VRM
 async function loadVRM(url: string) {
+  console.log('Loading VRM from:', url);
   const loader = new GLTFLoader();
   loader.register((parser) => new VRMLoaderPlugin(parser));
   
@@ -108,7 +118,19 @@ async function loadVRM(url: string) {
     // Reset rig data
     previousRig = {};
     
+    // Log available expression names
+    if (vrm.expressionManager) {
+      console.log('Available expressions:', vrm.expressionManager.expressions.map(e => e.expressionName));
+    }
+    
+    // Log available bones
+    if (vrm.humanoid) {
+      const boneNames = Object.keys(vrm.humanoid.humanBones);
+      console.log('Available bones:', boneNames);
+    }
+    
     status.textContent = 'VRMロード完了';
+    console.log('VRM loaded successfully');
   } catch (error) {
     console.error('VRM load error:', error);
     status.textContent = 'VRMロードエラー';
@@ -117,8 +139,11 @@ async function loadVRM(url: string) {
 
 // Initialize MediaPipe Holistic
 function initHolistic() {
-  const holistic = new Holistic({
-    locateFile: (file) => {
+  console.log('Initializing MediaPipe Holistic...');
+  
+  // @ts-ignore
+  const holistic = new window.Holistic({
+    locateFile: (file: string) => {
       return `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`;
     }
   });
@@ -136,6 +161,7 @@ function initHolistic() {
   
   holistic.onResults(onHolisticResults);
   
+  console.log('MediaPipe Holistic initialized');
   return holistic;
 }
 
@@ -202,10 +228,12 @@ function onHolisticResults(results: Results) {
   
   // Draw landmarks and connectors
   if (results.poseLandmarks) {
-    drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {
+    // @ts-ignore
+    drawConnectors(ctx, results.poseLandmarks, window.POSE_CONNECTIONS, {
       color: '#00FF00',
       lineWidth: 4
     });
+    // @ts-ignore
     drawLandmarks(ctx, results.poseLandmarks, {
       color: '#FF0000',
       lineWidth: 2
@@ -213,17 +241,20 @@ function onHolisticResults(results: Results) {
   }
   
   if (results.faceLandmarks) {
-    drawConnectors(ctx, results.faceLandmarks, FACEMESH_TESSELATION, {
+    // @ts-ignore
+    drawConnectors(ctx, results.faceLandmarks, window.FACEMESH_TESSELATION, {
       color: '#C0C0C070',
       lineWidth: 1
     });
   }
   
   if (results.leftHandLandmarks) {
-    drawConnectors(ctx, results.leftHandLandmarks, HAND_CONNECTIONS, {
+    // @ts-ignore
+    drawConnectors(ctx, results.leftHandLandmarks, window.HAND_CONNECTIONS, {
       color: '#CC0000',
       lineWidth: 5
     });
+    // @ts-ignore
     drawLandmarks(ctx, results.leftHandLandmarks, {
       color: '#00FF00',
       lineWidth: 2
@@ -231,10 +262,12 @@ function onHolisticResults(results: Results) {
   }
   
   if (results.rightHandLandmarks) {
-    drawConnectors(ctx, results.rightHandLandmarks, HAND_CONNECTIONS, {
+    // @ts-ignore
+    drawConnectors(ctx, results.rightHandLandmarks, window.HAND_CONNECTIONS, {
       color: '#00CC00',
       lineWidth: 5
     });
+    // @ts-ignore
     drawLandmarks(ctx, results.rightHandLandmarks, {
       color: '#FF0000',
       lineWidth: 2
@@ -251,10 +284,9 @@ function onHolisticResults(results: Results) {
 
 // Apply rigging to VRM
 function rigVRM(results: Results) {
-  if (!currentVrm) return;
+  if (!currentVrm || !currentVrm.humanoid) return;
   
   const humanoid = currentVrm.humanoid;
-  if (!humanoid) return;
   
   // Face
   if (results.faceLandmarks && results.faceLandmarks.length === 478) {
@@ -268,28 +300,55 @@ function rigVRM(results: Results) {
     
     if (face) {
       previousRig.head = face;
-      rigRotation(humanoid.getRawBoneNode('head'), face.head, 0.7);
+      
+      // Head rotation
+      const headBone = humanoid.getRawBoneNode('head');
+      if (headBone && face.head) {
+        rigRotation(headBone, face.head, 0.7);
+      }
       
       // Expressions
       const expressionManager = currentVrm.expressionManager;
-      if (expressionManager) {
-        expressionManager.setValue('blink', face.blink ?? 0);
-        expressionManager.setValue('blinkLeft', face.blink?.l ?? 0);
-        expressionManager.setValue('blinkRight', face.blink?.r ?? 0);
+      if (expressionManager && face.blink) {
+        // Try different expression names for compatibility
+        const blinkValue = (face.blink.l + face.blink.r) / 2;
         
-        // Mouth
-        expressionManager.setValue('aa', face.mouth?.shape.A ?? 0);
-        expressionManager.setValue('ee', face.mouth?.shape.E ?? 0);
-        expressionManager.setValue('ih', face.mouth?.shape.I ?? 0);
-        expressionManager.setValue('oh', face.mouth?.shape.O ?? 0);
-        expressionManager.setValue('ou', face.mouth?.shape.U ?? 0);
+        // Common expression names in VRM
+        expressionManager.setValue('blink', blinkValue);
+        expressionManager.setValue('Blink', blinkValue);
+        expressionManager.setValue('blinkLeft', face.blink.l);
+        expressionManager.setValue('BlinkLeft', face.blink.l);
+        expressionManager.setValue('blinkRight', face.blink.r);
+        expressionManager.setValue('BlinkRight', face.blink.r);
+        
+        // Mouth shapes
+        if (face.mouth) {
+          expressionManager.setValue('aa', face.mouth.shape.A || 0);
+          expressionManager.setValue('Aa', face.mouth.shape.A || 0);
+          expressionManager.setValue('A', face.mouth.shape.A || 0);
+          
+          expressionManager.setValue('ee', face.mouth.shape.E || 0);
+          expressionManager.setValue('Ee', face.mouth.shape.E || 0);
+          expressionManager.setValue('E', face.mouth.shape.E || 0);
+          
+          expressionManager.setValue('ih', face.mouth.shape.I || 0);
+          expressionManager.setValue('Ih', face.mouth.shape.I || 0);
+          expressionManager.setValue('I', face.mouth.shape.I || 0);
+          
+          expressionManager.setValue('oh', face.mouth.shape.O || 0);
+          expressionManager.setValue('Oh', face.mouth.shape.O || 0);
+          expressionManager.setValue('O', face.mouth.shape.O || 0);
+          
+          expressionManager.setValue('ou', face.mouth.shape.U || 0);
+          expressionManager.setValue('Ou', face.mouth.shape.U || 0);
+          expressionManager.setValue('U', face.mouth.shape.U || 0);
+        }
       }
     }
   }
   
   // Pose
-  if (isCompletePose(results.poseLandmarks)) {
-    // Hips
+  if (isCompletePose(results.poseLandmarks) && results.poseWorldLandmarks) {
     const hips = safeSolve(
       () => Kalidokit.Pose.solve(results.poseLandmarks!, results.poseWorldLandmarks!, {
         runtime: 'mediapipe',
@@ -301,53 +360,100 @@ function rigVRM(results: Results) {
     );
     
     if (hips) {
+      // Store for next frame
       previousRig.hips = hips;
-      rigPosition(humanoid.getRawBoneNode('hips'), {
-        x: hips.hips.position?.x ?? 0,
-        y: (hips.hips.position?.y ?? 0) + 1,
-        z: -(hips.hips.position?.z ?? 0)
-      }, 0.7);
       
-      rigRotation(humanoid.getRawBoneNode('hips'), hips.hips.rotation, 0.7);
-      rigRotation(humanoid.getRawBoneNode('spine'), hips.spine, 0.7);
+      // Hips position and rotation
+      const hipsBone = humanoid.getRawBoneNode('hips');
+      if (hipsBone) {
+        if (hips.hips.position) {
+          rigPosition(hipsBone, {
+            x: hips.hips.position.x,
+            y: (hips.hips.position.y) + 1,
+            z: -(hips.hips.position.z)
+          }, 0.7);
+        }
+        
+        if (hips.hips.rotation) {
+          rigRotation(hipsBone, hips.hips.rotation, 0.7);
+        }
+      }
+      
+      // Spine
+      const spineBone = humanoid.getRawBoneNode('spine');
+      if (spineBone && hips.spine) {
+        rigRotation(spineBone, hips.spine, 0.7);
+      }
       
       // Arms
-      rigRotation(humanoid.getRawBoneNode('leftUpperArm'), hips.leftUpperArm, 0.7);
-      rigRotation(humanoid.getRawBoneNode('leftLowerArm'), hips.leftLowerArm, 0.7);
-      rigRotation(humanoid.getRawBoneNode('rightUpperArm'), hips.rightUpperArm, 0.7);
-      rigRotation(humanoid.getRawBoneNode('rightLowerArm'), hips.rightLowerArm, 0.7);
+      const leftUpperArmBone = humanoid.getRawBoneNode('leftUpperArm');
+      if (leftUpperArmBone && hips.leftUpperArm) {
+        rigRotation(leftUpperArmBone, hips.leftUpperArm, 0.7);
+      }
+      
+      const leftLowerArmBone = humanoid.getRawBoneNode('leftLowerArm');
+      if (leftLowerArmBone && hips.leftLowerArm) {
+        rigRotation(leftLowerArmBone, hips.leftLowerArm, 0.7);
+      }
+      
+      const rightUpperArmBone = humanoid.getRawBoneNode('rightUpperArm');
+      if (rightUpperArmBone && hips.rightUpperArm) {
+        rigRotation(rightUpperArmBone, hips.rightUpperArm, 0.7);
+      }
+      
+      const rightLowerArmBone = humanoid.getRawBoneNode('rightLowerArm');
+      if (rightLowerArmBone && hips.rightLowerArm) {
+        rigRotation(rightLowerArmBone, hips.rightLowerArm, 0.7);
+      }
       
       // Legs
-      rigRotation(humanoid.getRawBoneNode('leftUpperLeg'), hips.leftUpperLeg, 0.7);
-      rigRotation(humanoid.getRawBoneNode('leftLowerLeg'), hips.leftLowerLeg, 0.7);
-      rigRotation(humanoid.getRawBoneNode('rightUpperLeg'), hips.rightUpperLeg, 0.7);
-      rigRotation(humanoid.getRawBoneNode('rightLowerLeg'), hips.rightLowerLeg, 0.7);
-    }
-  }
-  
-  // Hands
-  if (results.leftHandLandmarks && humanoid.getRawBoneNode('leftHand')) {
-    const leftHand = safeSolve(
-      () => Kalidokit.Hand.solve(results.leftHandLandmarks!, 'Left'),
-      undefined
-    );
-    if (leftHand) {
-      rigRotation(humanoid.getRawBoneNode('leftHand'), leftHand.LeftWrist, 0.7);
-      if (humanoid.getRawBoneNode('leftRingProximal')) {
-        Kalidokit.Utils.rigFingers(leftHand, 'Left', humanoid.getRawBoneNode.bind(humanoid) as any);
+      const leftUpperLegBone = humanoid.getRawBoneNode('leftUpperLeg');
+      if (leftUpperLegBone && hips.leftUpperLeg) {
+        rigRotation(leftUpperLegBone, hips.leftUpperLeg, 0.7);
+      }
+      
+      const leftLowerLegBone = humanoid.getRawBoneNode('leftLowerLeg');
+      if (leftLowerLegBone && hips.leftLowerLeg) {
+        rigRotation(leftLowerLegBone, hips.leftLowerLeg, 0.7);
+      }
+      
+      const rightUpperLegBone = humanoid.getRawBoneNode('rightUpperLeg');
+      if (rightUpperLegBone && hips.rightUpperLeg) {
+        rigRotation(rightUpperLegBone, hips.rightUpperLeg, 0.7);
+      }
+      
+      const rightLowerLegBone = humanoid.getRawBoneNode('rightLowerLeg');
+      if (rightLowerLegBone && hips.rightLowerLeg) {
+        rigRotation(rightLowerLegBone, hips.rightLowerLeg, 0.7);
       }
     }
   }
   
-  if (results.rightHandLandmarks && humanoid.getRawBoneNode('rightHand')) {
-    const rightHand = safeSolve(
-      () => Kalidokit.Hand.solve(results.rightHandLandmarks!, 'Right'),
-      undefined
-    );
-    if (rightHand) {
-      rigRotation(humanoid.getRawBoneNode('rightHand'), rightHand.RightWrist, 0.7);
-      if (humanoid.getRawBoneNode('rightRingProximal')) {
-        Kalidokit.Utils.rigFingers(rightHand, 'Right', humanoid.getRawBoneNode.bind(humanoid) as any);
+  // Hands
+  if (results.leftHandLandmarks) {
+    const leftHandBone = humanoid.getRawBoneNode('leftHand');
+    if (leftHandBone) {
+      const leftHand = safeSolve(
+        () => Kalidokit.Hand.solve(results.leftHandLandmarks!, 'Left'),
+        undefined
+      );
+      
+      if (leftHand && leftHand.LeftWrist) {
+        rigRotation(leftHandBone, leftHand.LeftWrist, 0.7);
+      }
+    }
+  }
+  
+  if (results.rightHandLandmarks) {
+    const rightHandBone = humanoid.getRawBoneNode('rightHand');
+    if (rightHandBone) {
+      const rightHand = safeSolve(
+        () => Kalidokit.Hand.solve(results.rightHandLandmarks!, 'Right'),
+        undefined
+      );
+      
+      if (rightHand && rightHand.RightWrist) {
+        rigRotation(rightHandBone, rightHand.RightWrist, 0.7);
       }
     }
   }
@@ -371,6 +477,8 @@ function animate() {
 // Start camera and detection
 async function startCamera() {
   try {
+    console.log('Starting camera...');
+    
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         width: 1280,
@@ -382,16 +490,30 @@ async function startCamera() {
     video.srcObject = stream;
     await video.play();
     
+    console.log('Camera started');
+    
     // Set canvas sizes
     guides.width = window.innerWidth;
     guides.height = window.innerHeight;
     
-    // Start holistic detection
-    const holistic = initHolistic();
+    // Initialize Holistic if not already done
+    if (!holisticInstance) {
+      holisticInstance = initHolistic();
+    }
+    
+    // Start detection loop
+    isDetecting = true;
     
     const detectFrame = async () => {
-      await holistic.send({ image: video });
-      requestAnimationFrame(detectFrame);
+      if (!isDetecting) return;
+      
+      if (video.readyState >= 2) {
+        await holisticInstance.send({ image: video });
+      }
+      
+      if (isDetecting) {
+        requestAnimationFrame(detectFrame);
+      }
     };
     
     detectFrame();
@@ -399,6 +521,8 @@ async function startCamera() {
     status.textContent = '検出中...';
     startBtn.textContent = 'カメラを停止';
     startBtn.onclick = stopCamera;
+    
+    console.log('Detection started');
   } catch (error) {
     console.error('Camera error:', error);
     status.textContent = 'カメラエラー';
@@ -406,60 +530,71 @@ async function startCamera() {
 }
 
 function stopCamera() {
+  console.log('Stopping camera...');
+  
+  isDetecting = false;
+  
   const stream = video.srcObject as MediaStream;
   if (stream) {
     stream.getTracks().forEach(track => track.stop());
     video.srcObject = null;
   }
   
+  // Clear canvas
+  const ctx = guides.getContext('2d');
+  if (ctx) {
+    ctx.clearRect(0, 0, guides.width, guides.height);
+  }
+  
   startBtn.textContent = 'カメラを開始';
   startBtn.onclick = startCamera;
   status.textContent = 'カメラ停止';
+  
+  console.log('Camera stopped');
 }
 
-// MediaPipe landmark connections
-const POSE_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 7], [0, 4], [4, 5],
-  [5, 6], [6, 8], [9, 10], [11, 12], [11, 13],
-  [13, 15], [15, 17], [15, 19], [15, 21], [17, 19],
-  [12, 14], [14, 16], [16, 18], [16, 20], [16, 22],
-  [18, 20], [11, 23], [12, 24], [23, 24], [23, 25],
-  [24, 26], [25, 27], [26, 28], [27, 29], [28, 30],
-  [29, 31], [30, 32], [27, 31], [28, 32]
-];
-
-const FACEMESH_TESSELATION = [
-  [127, 34], [34, 139], [139, 127], [11, 0], [0, 269],
-  [269, 11], [270, 271], [271, 272], [272, 270], [267, 269],
-  [269, 270], [270, 267], [0, 267], [267, 269], [269, 0]
-  // ... truncated for brevity
-];
-
-const HAND_CONNECTIONS = [
-  [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6],
-  [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
-  [9, 13], [13, 14], [14, 15], [15, 16], [13, 17],
-  [0, 17], [17, 18], [18, 19], [19, 20]
-];
-
-// Initialize
-initThree();
-animate();
-
-// Load default VRM
-loadVRM('/avatar.vrm').catch(() => {
-  status.textContent = 'デフォルトVRMが見つかりません';
-});
-
-// Event listeners
-startBtn.onclick = startCamera;
-
-vrmUpload.onchange = (e) => {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (file) {
-    const url = URL.createObjectURL(file);
-    loadVRM(url);
+// Wait for MediaPipe to load
+window.addEventListener('load', async () => {
+  console.log('Page loaded, loading MediaPipe scripts...');
+  
+  // Load MediaPipe scripts
+  const scripts = [
+    'https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js',
+    'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js',
+    'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js'
+  ];
+  
+  for (const src of scripts) {
+    await new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error(`Failed to load ${src}`));
+      document.head.appendChild(script);
+    });
   }
-};
-
-status.textContent = '準備完了';
+  
+  console.log('MediaPipe scripts loaded');
+  
+  // Initialize Three.js
+  initThree();
+  animate();
+  
+  // Load default VRM
+  loadVRM('/avatar.vrm').catch(() => {
+    status.textContent = 'デフォルトVRMが見つかりません。VRMファイルを選択してください。';
+  });
+  
+  // Event listeners
+  startBtn.onclick = startCamera;
+  
+  vrmUpload.onchange = (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      loadVRM(url);
+    }
+  };
+  
+  status.textContent = '準備完了';
+});
