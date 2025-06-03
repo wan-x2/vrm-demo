@@ -304,8 +304,8 @@ function rigVRM(results: Results) {
       previousRig.hips = hips;
       rigPosition(humanoid.getRawBoneNode('hips'), {
         x: hips.hips.position?.x ?? 0,
-        y: hips.hips.position?.y ?? 0 + 1,
-        z: -hips.hips.position?.z ?? 0
+        y: (hips.hips.position?.y ?? 0) + 1,
+        z: -(hips.hips.position?.z ?? 0)
       }, 0.7);
       
       rigRotation(humanoid.getRawBoneNode('hips'), hips.hips.rotation, 0.7);
